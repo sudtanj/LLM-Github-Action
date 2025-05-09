@@ -1,0 +1,57 @@
+name: Ollama Deepseek R1 Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Text prompt to send to Deepseek model'
+        required: true
+        type: string
+
+jobs:
+  run-ollama:
+    runs-on: ubuntu-latest
+    outputs:
+      model_response: ${{ steps.query-model.outputs.response }}
+    
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Run Ollama with Deepseek model
+        run: |
+          docker run -d --name ollama -p 11434:11434 ollama/ollama
+          echo "Waiting for Ollama to start..."
+          sleep 10
+          docker exec ollama ollama pull deepseek:latest
+          echo "Deepseek model pulled successfully"
+      
+      - name: Query Deepseek model
+        id: query-model
+        run: |
+          PROMPT="${{ github.event.inputs.prompt }}"
+          echo "Sending prompt to Deepseek model: $PROMPT"
+          
+          RESPONSE=$(curl -s http://localhost:11434/api/generate -d '{
+            "model": "deepseek",
+            "prompt": "'"$PROMPT"'",
+            "stream": false
+          }')
+          
+          # Extract the response content from the JSON
+          CONTENT=$(echo $RESPONSE | jq -r '.response')
+          
+          # Use GitHub Actions output command to save the response
+          echo "response<<EOF" >> $GITHUB_OUTPUT
+          echo "$CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "Response from Deepseek model saved"
+      
+      - name: Display model response
+        run: |
+          echo "Response from Deepseek model:"
+          echo "${{ steps.query-model.outputs.response }}"
