@@ -1,0 +1,104 @@
+name: Ollama Llama Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Text prompt to send to Llama model'
+        required: true
+        type: string
+      model_version:
+        description: 'Llama model version (llama2, llama3, llama3:8b, llama3:70b)'
+        required: true
+        default: 'llama3'
+        type: choice
+        options:
+          - llama2
+          - llama3
+          - 'llama3:8b'
+          - 'llama3:70b'
+
+jobs:
+  run-ollama:
+    runs-on: ubuntu-latest
+    outputs:
+      model_response: ${{ steps.query-model.outputs.response }}
+    
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Set up Docker layer caching to speed up builds
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Cache Docker images between runs
+      - name: Cache Docker images
+        uses: actions/cache@v3
+        with:
+          path: /tmp/docker-cache
+          key: ${{ runner.os }}-docker-${{ hashFiles('**/llama.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-docker-
+
+      # Cache Ollama models between runs
+      - name: Cache Ollama models
+        uses: actions/cache@v3
+        with:
+          path: ~/.ollama/models
+          key: ${{ runner.os }}-ollama-${{ github.event.inputs.model_version }}
+          restore-keys: |
+            ${{ runner.os }}-ollama-
+
+      # Save Docker image to cache and load it
+      - name: Load cached Docker image
+        run: |
+          if [ -f /tmp/docker-cache/ollama-image.tar ]; then
+            docker load < /tmp/docker-cache/ollama-image.tar
+            echo "Loaded Ollama Docker image from cache"
+          else
+            echo "No cached Docker image found, will pull from registry"
+            mkdir -p /tmp/docker-cache
+            docker pull ollama/ollama:latest
+            docker save ollama/ollama:latest > /tmp/docker-cache/ollama-image.tar
+          fi
+      
+      - name: Run Ollama with Llama model
+        run: |
+          # Create Ollama models directory for cache persistence
+          mkdir -p ~/.ollama/models
+          # Run Ollama container with cache volume mount
+          docker run -d --name ollama -p 11434:11434 -v ~/.ollama/models:/root/.ollama/models ollama/ollama
+          echo "Waiting for Ollama to start..."
+          sleep 10
+          # Pull the selected Llama model
+          docker exec ollama ollama pull ${{ github.event.inputs.model_version }}
+          echo "Llama model ${{ github.event.inputs.model_version }} pulled successfully"
+      
+      - name: Query Llama model
+        id: query-model
+        run: |
+          PROMPT="${{ github.event.inputs.prompt }}"
+          MODEL="${{ github.event.inputs.model_version }}"
+          echo "Sending prompt to $MODEL model: $PROMPT"
+          
+          RESPONSE=$(curl -s http://localhost:11434/api/generate -d '{
+            "model": "'"$MODEL"'",
+            "prompt": "'"$PROMPT"'",
+            "stream": false
+          }')
+          
+          # Extract the response content from the JSON
+          CONTENT=$(echo $RESPONSE | jq -r '.response')
+          
+          # Use GitHub Actions output command to save the response
+          echo "response<<EOF" >> $GITHUB_OUTPUT
+          echo "$CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "Response from Llama model saved"
+      
+      - name: Display model response
+        run: |
+          echo "Response from Llama ${{ github.event.inputs.model_version }} model:"
+          echo "${{ steps.query-model.outputs.response }}"
