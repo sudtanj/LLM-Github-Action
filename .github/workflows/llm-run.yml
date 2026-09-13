@@ -1,0 +1,45 @@
+name: LLM run (on-demand Ollama)
+
+# Triggered by the llm-gateway module in sudtanj/deno-ide-playground via
+# POST /repos/{owner}/{repo}/dispatches with event_type "llm-run". See that
+# repo's README ("LLM gateway" section) for the full request/response flow.
+#
+# repository_dispatch never hands back a run id, so there's nothing to poll:
+# this workflow is instead handed a request id, a callback URL and a
+# per-request callback token, and reports its own result back directly via
+# scripts/run-llm.sh.
+on:
+  repository_dispatch:
+    types: [llm-run]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Ollama models
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ollama-model-${{ github.event.client_payload.model }}
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Write messages payload
+        env:
+          MESSAGES_JSON: ${{ toJson(github.event.client_payload.messages) }}
+        run: echo "$MESSAGES_JSON" > "$RUNNER_TEMP/messages.json"
+
+      - name: Run inference and report result
+        env:
+          REQUEST_ID: ${{ github.event.client_payload.request_id }}
+          CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
+          CALLBACK_TOKEN: ${{ github.event.client_payload.callback_token }}
+          MODEL: ${{ github.event.client_payload.model }}
+        run: |
+          chmod +x scripts/run-llm.sh
+          ./scripts/run-llm.sh "$REQUEST_ID" "$CALLBACK_URL" "$CALLBACK_TOKEN" "$MODEL" "$RUNNER_TEMP/messages.json"
