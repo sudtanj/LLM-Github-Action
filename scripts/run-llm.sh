@@ -19,6 +19,25 @@ MESSAGES_FILE="$5"
 COMPLETION_FILE="$(mktemp)"
 ERROR_MSG=""
 
+# This repo is public, so its Actions logs are too. Nothing below ever
+# echoes the caller's messages or the model's reply -- request/response
+# bodies only ever travel through files and curl's -d/-o, never stdout -- but
+# every line of both is registered as a masked value anyway, so that if a
+# future edit (or a crash dump from some tool) ever does print one, the log
+# shows "***" instead of the caller's prompt. GitHub only masks a value from
+# the point it's registered onward and matches whole lines, which is why
+# this masks the messages file immediately and the completion the moment
+# it's downloaded, rather than once at the end.
+mask_file_lines() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] && echo "::add-mask::$line"
+  done < "$file"
+}
+
+mask_file_lines "$MESSAGES_FILE"
+
 send_callback() {
   local completion_json="null"
   local error_json="null"
@@ -82,9 +101,13 @@ HTTP_CODE="$(curl -sS --max-time 600 -o "$COMPLETION_FILE" -w '%{http_code}' \
   -d "$REQUEST_BODY")"
 
 if [[ "$HTTP_CODE" != "200" ]]; then
+  # Masked below, and only ever sent to the callback URL, never printed here
+  # -- an error body can echo back parts of the request.
+  mask_file_lines "$COMPLETION_FILE"
   ERROR_MSG="Ollama returned HTTP $HTTP_CODE: $(cat "$COMPLETION_FILE" 2>/dev/null | head -c 2000)"
   : > "$COMPLETION_FILE"
   exit 1
 fi
 
+mask_file_lines "$COMPLETION_FILE"
 echo "Completion succeeded."

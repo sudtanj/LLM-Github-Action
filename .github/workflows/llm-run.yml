@@ -32,7 +32,18 @@ jobs:
       - name: Write messages payload
         env:
           MESSAGES_JSON: ${{ toJson(github.event.client_payload.messages) }}
-        run: echo "$MESSAGES_JSON" > "$RUNNER_TEMP/messages.json"
+        run: |
+          # This repo is public, so its Actions logs are too: mask every
+          # non-empty line of the payload now, before anything has a chance
+          # to print it, so even an accidental echo or error dump later in
+          # the job shows "***" instead of the caller's prompt. GitHub only
+          # masks values registered *before* they'd appear in the log, and
+          # only matches on exact line content, which is why this runs first
+          # and line-by-line rather than as one multi-line block.
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::add-mask::$line"
+          done <<< "$MESSAGES_JSON"
+          echo "$MESSAGES_JSON" > "$RUNNER_TEMP/messages.json"
 
       - name: Run inference and report result
         env:
